@@ -11,31 +11,29 @@ const MS_CLIENT_ID = process.env.MS_CLIENT_ID;
 const MS_REFRESH_TOKEN = process.env.MS_REFRESH_TOKEN;
 const ONEDRIVE_FOLDER = process.env.ONEDRIVE_FOLDER || "CrossChex";
 
-const STATE_FILE = "state.json";
 const OUT_CSV = "attendance.csv";
 
 if (!API_KEY || !API_SECRET || !MS_CLIENT_ID || !MS_REFRESH_TOKEN) {
   throw new Error("Missing required env vars. Check GitHub Secrets.");
 }
 
-function isoNowUTC() {
-  return new Date().toISOString();
-}
+const NY_TZ = "America/New_York";
 
-function isoMinusDays(days) {
-  return new Date(Date.now() - days * 86400_000).toISOString();
-}
-
-function loadState() {
-  if (fs.existsSync(STATE_FILE)) {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-  }
-  // 최초는 최근 1일만
-  return { last_sync_utc: isoMinusDays(1) };
-}
-
-function saveState(state) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+/** UTC Date → { date: "YYYY-MM-DD", time: "HH:MM", ts: Date } in New York tz */
+function toNY(dateInput) {
+  const d = new Date(dateInput);
+  const parts = {};
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: NY_TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  }).formatToParts(d).forEach(({ type, value }) => (parts[type] = value));
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    time: `${parts.hour}:${parts.minute}`,
+    ts: d,
+  };
 }
 
 // CrossChex 문서에서 흔히 쓰는 begin_time/end_time 포맷이 "YYYY-MM-DD HH:mm:ss"인 경우가 많아서 변환
@@ -139,20 +137,84 @@ function csvEscape(v) {
 }
 
 function writeCsv(rows, filename) {
-  // API 응답 구조가 계정마다 조금 달라서, 우선 “안전한 최소 컬럼 + raw_json”으로 저장
-  const headers = ["user_id", "user_name", "device", "check_time", "status", "raw_json"];
-  const lines = [headers.join(",")];
+  const headers = [
+    "Name", "Employee No.", "Position", "Department", "Date",
+    "Duty time", "Punch In", "Punch Out", "Duty time",
+    "Work time", "Late", "Early", "Overtime", "Absent time",
+    "Actual time", "Breaktime", "Leavetime", " Exception",
+  ];
+
+  // 펀치 기록을 (직원, 날짜) 단위로 그룹핑 -- 뉴욕 시간 기준
+  const groups = new Map();
 
   for (const x of rows) {
-    const row = {
-      user_id: x.user_id ?? x.employee_id ?? x.id ?? "",
-      user_name: x.user_name ?? x.name ?? "",
-      device: x.device ?? x.device_name ?? "",
-      check_time: x.check_time ?? x.time ?? x.datetime ?? "",
-      status: x.status ?? x.type ?? "",
-      raw_json: JSON.stringify(x),
-    };
-    lines.push(headers.map(h => csvEscape(row[h])).join(","));
+    const checkTime = x.checktime ?? x.check_time ?? x.time ?? x.datetime ?? "";
+    if (!checkTime) continue;
+
+    const emp      = x.employee ?? {};
+    const userId   = emp.workno ?? x.user_id ?? x.employee_id ?? x.id ?? "";
+    const userName = [emp.first_name, emp.last_name].filter(Boolean).join(" ") || (x.user_name ?? x.name ?? "");
+    const dept     = emp.department ?? x.department ?? x.dept_name ?? "";
+    const position = emp.job_title ?? x.position ?? "";
+
+    const ny  = toNY(checkTime);
+    const key = `${userId}||${ny.date}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        name: userName,
+        employeeNo: userId,
+        position,
+        department: dept,
+        date: ny.date,
+        punches: [],
+      });
+    }
+    groups.get(key).punches.push(ny);
+  }
+
+  // 날짜 내림차순, 같은 날짜면 Punch In 오름차순
+  const sorted = [...groups.values()].sort((a, b) => {
+    if (a.date !== b.date) return b.date.localeCompare(a.date);
+    const aIn = a.punches[0]?.time ?? "";
+    const bIn = b.punches[0]?.time ?? "";
+    return aIn.localeCompare(bIn);
+  });
+
+  const lines = [headers.join(",")];
+
+  for (const g of sorted) {
+    g.punches.sort((a, b) => a.ts - b.ts);
+    const punchIn  = g.punches[0].time;
+    const punchOut = g.punches.length > 1 ? g.punches[g.punches.length - 1].time : "";
+
+    let actualTime = "00:00";
+    if (g.punches.length > 1) {
+      const diffMs   = g.punches[g.punches.length - 1].ts - g.punches[0].ts;
+      const totalMin = Math.floor(diffMs / 60000);
+      const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
+      const mm = String(totalMin % 60).padStart(2, "0");
+      actualTime = `${hh}:${mm}`;
+    }
+
+    const exception = punchOut ? " " : "1";
+
+    const row = [
+      g.name, g.employeeNo, g.position, g.department, g.date,
+      "",          // Duty time
+      punchIn, punchOut,
+      "00:00",     // Duty time
+      "00:00",     // Work time
+      "00:00",     // Late
+      "00:00",     // Early
+      "00:00",     // Overtime
+      "00:00",     // Absent time
+      actualTime,  // Actual time
+      "00:00",     // Breaktime
+      "00:00",     // Leavetime
+      exception,
+    ];
+    lines.push(row.map(v => csvEscape(v)).join(","));
   }
 
   fs.writeFileSync(filename, lines.join("\n"), "utf-8");
@@ -200,35 +262,42 @@ async function graphPutFile(accessToken, remotePath, localPath) {
   return JSON.parse(text);
 }
 
-function todayUTC() {
-  const d = new Date();
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+/** 뉴욕 기준 어제 날짜의 시작/끝을 CrossChex 형식으로 반환 */
+function yesterdayRangeNY() {
+  const now = new Date();
+  // 뉴욕 기준 "오늘" 자정을 구한 뒤 하루 빼기
+  const nyDateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: NY_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now); // "YYYY-MM-DD"
+
+  const todayNY = new Date(`${nyDateStr}T00:00:00`);
+  const yesterdayNY = new Date(todayNY.getTime() - 86400_000);
+
+  const y = yesterdayNY.getFullYear();
+  const m = String(yesterdayNY.getMonth() + 1).padStart(2, "0");
+  const d = String(yesterdayNY.getDate()).padStart(2, "0");
+  const dateStr = `${y}-${m}-${d}`;
+
+  return {
+    dateStr,
+    begin: `${dateStr} 00:00:00`,
+    end:   `${dateStr} 23:59:59`,
+  };
 }
 
 async function main() {
-  const state = loadState();
-  const lastSync = state.last_sync_utc;
-  const now = isoNowUTC();
+  const { dateStr, begin, end } = yesterdayRangeNY();
+  console.log(`Fetching attendance for ${dateStr} (NY time)...`);
 
   const ccToken = await crossChexGetToken();
-  const records = await crossChexGetRecords(ccToken, lastSync, now);
+  const records = await crossChexGetRecords(ccToken, begin, end);
 
   writeCsv(records, OUT_CSV);
 
   const { access_token, refresh_token: rotated } = await graphRefreshAccessToken();
 
-  const day = todayUTC();
-  const remoteCsv = path.posix.join(ONEDRIVE_FOLDER, `attendance_${day}.csv`);
-  const remoteState = path.posix.join(ONEDRIVE_FOLDER, `state.json`);
-
+  const remoteCsv = path.posix.join(ONEDRIVE_FOLDER, `attendance_${dateStr}.csv`);
   await graphPutFile(access_token, remoteCsv, OUT_CSV);
-
-  state.last_sync_utc = now;
-  saveState(state);
-  await graphPutFile(access_token, remoteState, STATE_FILE);
 
   if (rotated && rotated !== MS_REFRESH_TOKEN) {
     console.log("NOTE: refresh_token rotated. Update GitHub Secret MS_REFRESH_TOKEN if uploads start failing later.");
