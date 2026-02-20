@@ -1,0 +1,27 @@
+name: CrossChex -> OneDrive
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 2AM EDT (UTC-4)
+    - cron: "0 7 * * *"   # 2AM EST (UTC-5)
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run sync
+        env:
+          CROSSCHEX_API_KEY: ${{ secrets.CROSSCHEX_API_KEY }}
+          CROSSCHEX_API_SECRET: ${{ secrets.CROSSCHEX_API_SECRET }}
+          CROSSCHEX_BASE: ${{ secrets.CROSSCHEX_BASE }}
+          MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
+          MS_REFRESH_TOKEN: ${{ secrets.MS_REFRESH_TOKEN }}
+          ONEDRIVE_FOLDER: ${{ secrets.ONEDRIVE_FOLDER }}
+        run: node sync.mjs
