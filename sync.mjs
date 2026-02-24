@@ -137,12 +137,7 @@ function csvEscape(v) {
 }
 
 function writeCsv(rows, filename) {
-  const headers = [
-    "Name", "Employee No.", "Position", "Department", "Date",
-    "Duty time", "Punch In", "Punch Out", "Duty time",
-    "Work time", "Late", "Early", "Overtime", "Absent time",
-    "Actual time", "Breaktime", "Leavetime", " Exception",
-  ];
+  const headers = ["Name", "Date", "Punch In", "Punch Out"];
 
   // 펀치 기록을 (직원, 날짜) 단위로 그룹핑 -- 뉴욕 시간 기준
   const groups = new Map();
@@ -188,32 +183,7 @@ function writeCsv(rows, filename) {
     const punchIn  = g.punches[0].time;
     const punchOut = g.punches.length > 1 ? g.punches[g.punches.length - 1].time : "";
 
-    let actualTime = "00:00";
-    if (g.punches.length > 1) {
-      const diffMs   = g.punches[g.punches.length - 1].ts - g.punches[0].ts;
-      const totalMin = Math.floor(diffMs / 60000);
-      const hh = String(Math.floor(totalMin / 60)).padStart(2, "0");
-      const mm = String(totalMin % 60).padStart(2, "0");
-      actualTime = `${hh}:${mm}`;
-    }
-
-    const exception = punchOut ? " " : "1";
-
-    const row = [
-      g.name, g.employeeNo, g.position, g.department, g.date,
-      "",          // Duty time
-      punchIn, punchOut,
-      "00:00",     // Duty time
-      "00:00",     // Work time
-      "00:00",     // Late
-      "00:00",     // Early
-      "00:00",     // Overtime
-      "00:00",     // Absent time
-      actualTime,  // Actual time
-      "00:00",     // Breaktime
-      "00:00",     // Leavetime
-      exception,
-    ];
+    const row = [g.name, g.date, punchIn, punchOut];
     lines.push(row.map(v => csvEscape(v)).join(","));
   }
 
