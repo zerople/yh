@@ -2,8 +2,7 @@ name: CrossChex -> OneDrive
 
 on:
   schedule:
-    - cron: "0 6 * * *"   # 2AM EDT (UTC-4)
-    - cron: "0 7 * * *"   # 2AM EST (UTC-5)
+    - cron: "0 7 * * *"   # ~2AM New York (EST=2AM, EDT=3AM — 스크립트가 DST 자동 처리)
   workflow_dispatch:
 
 jobs:

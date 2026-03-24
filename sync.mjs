@@ -36,17 +36,6 @@ function toNY(dateInput) {
   };
 }
 
-// CrossChex 문서에서 흔히 쓰는 begin_time/end_time 포맷이 "YYYY-MM-DD HH:mm:ss"인 경우가 많아서 변환
-function toCrossChexDateTime(iso) {
-  const d = new Date(iso);
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(d.getUTCDate()).padStart(2, "0");
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mi = String(d.getUTCMinutes()).padStart(2, "0");
-  const ss = String(d.getUTCSeconds()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
-}
 
 async function postJson(url, body) {
   const res = await fetch(url, {
@@ -86,9 +75,9 @@ async function crossChexGetToken() {
   return token;
 }
 
-async function crossChexGetRecords(token, beginIso, endIso) {
-  const begin_time = toCrossChexDateTime(beginIso);
-  const end_time = toCrossChexDateTime(endIso);
+async function crossChexGetRecords(token, beginTime, endTime) {
+  const begin_time = beginTime;
+  const end_time = endTime;
 
   const per_page = 200;
   let page = 1;
@@ -232,21 +221,21 @@ async function graphPutFile(accessToken, remotePath, localPath) {
   return JSON.parse(text);
 }
 
-/** 뉴욕 기준 어제 날짜의 시작/끝을 CrossChex 형식으로 반환 */
+/** 뉴욕 기준 어제 날짜의 시작/끝을 CrossChex 형식(뉴욕 로컬 시간)으로 반환 */
 function yesterdayRangeNY() {
   const now = new Date();
-  // 뉴욕 기준 "오늘" 자정을 구한 뒤 하루 빼기
+  // 뉴욕 기준 "오늘" 날짜 문자열
   const nyDateStr = new Intl.DateTimeFormat("en-CA", {
     timeZone: NY_TZ, year: "numeric", month: "2-digit", day: "2-digit",
   }).format(now); // "YYYY-MM-DD"
 
-  const todayNY = new Date(`${nyDateStr}T00:00:00`);
-  const yesterdayNY = new Date(todayNY.getTime() - 86400_000);
-
-  const y = yesterdayNY.getFullYear();
-  const m = String(yesterdayNY.getMonth() + 1).padStart(2, "0");
-  const d = String(yesterdayNY.getDate()).padStart(2, "0");
-  const dateStr = `${y}-${m}-${d}`;
+  // 달력 연산으로 하루 빼기 (86400ms 고정값 대신 — DST 전환일에도 안전)
+  const [y, m, d] = nyDateStr.split("-").map(Number);
+  const yesterday = new Date(Date.UTC(y, m - 1, d - 1));
+  const yy = yesterday.getUTCFullYear();
+  const mm = String(yesterday.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(yesterday.getUTCDate()).padStart(2, "0");
+  const dateStr = `${yy}-${mm}-${dd}`;
 
   return {
     dateStr,
